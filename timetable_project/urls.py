@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.urls import path
-from timetable_project import views
+from timetable import views
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -50,6 +50,10 @@ urlpatterns = [
     path('timetable/group/', views.timetable_by_group, name='timetable_by_group'),
     path('timetable/delete/<int:pk>/', views.entry_delete, name='entry_delete'),
     path('timetable/clear/', views.entry_delete_all, name='entry_delete_all'),
+    path('timetable/download/csv/', views.download_timetable_csv, name='download_timetable_csv'),
+    path('timetable/download/excel/', views.download_timetable_excel, name='download_timetable_excel'),
+    path('timetable/download/group/<int:group_id>/csv/', views.download_group_timetable_csv, name='download_group_timetable_csv'),
+    path('timetable/download/all-groups/csv/', views.download_all_groups_timetable, name='download_all_groups_timetable'),
     
     path('', views.dashboard, name='home'),
 ]

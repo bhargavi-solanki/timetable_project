@@ -3,11 +3,16 @@ from django.contrib.auth import login, logout, authenticate
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
 from django.contrib import messages
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.core.paginator import Paginator
+from django.template.loader import render_to_string
+from django.db.models import Count
 from .models import (Department, Faculty, Classroom, Course, TimeSlot, 
                     StudentGroup, CourseAssignment, TimetableEntry)
 from .generator import TimetableGenerator
+import io
+import csv
+from datetime import datetime
 
 def register(request):
     if request.method == 'POST':
@@ -459,22 +464,40 @@ def timetable_by_group(request):
         
         slot_data = {}
         slot_list = []
+        
+        all_times = TimeSlot.objects.filter(is_break=False, is_lunch=False).values('start_time', 'end_time').distinct().order_by('start_time')
+        for time in all_times:
+            time_key = f"{time['start_time']}-{time['end_time']}"
+            slot_data[time_key] = {
+                'start': time['start_time'].strftime('%H:%M'),
+                'end': time['end_time'].strftime('%H:%M'),
+                'monday': '',
+                'tuesday': '',
+                'wednesday': '',
+                'thursday': '',
+                'friday': ''
+            }
+            slot_list.append({'id': time_key, 'start': time['start_time'].strftime('%H:%M'), 'end': time['end_time'].strftime('%H:%M')})
+        
         for entry in entries:
             slot = entry.time_slot
-            slot_id = slot.id
-            day = slot.day
-            if slot_id not in slot_data:
-                slot_data[slot_id] = {
-                    'start': str(slot.start_time),
-                    'end': str(slot.end_time),
-                    'monday': '',
-                    'tuesday': '',
-                    'wednesday': '',
-                    'thursday': '',
-                    'friday': ''
-                }
-                slot_list.append({'id': slot_id, 'start': str(slot.start_time), 'end': str(slot.end_time)})
-            slot_data[slot_id][day] = entry.course_assignment.course.name
+            time_key = f"{slot.start_time}-{slot.end_time}"
+            if time_key in slot_data:
+                slot_data[time_key][slot.day] = entry.course_assignment.course.name
+        
+        break_times = TimeSlot.objects.filter(is_break=True).values('start_time', 'end_time').distinct().order_by('start_time')
+        for time in break_times:
+            time_key = f"{time['start_time']}-{time['end_time']}"
+            slot_data[time_key] = {
+                'start': time['start_time'].strftime('%H:%M'),
+                'end': time['end_time'].strftime('%H:%M'),
+                'monday': 'BREAK',
+                'tuesday': 'BREAK',
+                'wednesday': 'BREAK',
+                'thursday': 'BREAK',
+                'friday': 'BREAK'
+            }
+            slot_list.append({'id': time_key, 'start': time['start_time'].strftime('%H:%M'), 'end': time['end_time'].strftime('%H:%M'), 'is_break': True})
         
         slot_list.sort(key=lambda x: x['start'])
     else:
@@ -503,3 +526,177 @@ def entry_delete_all(request):
     TimetableEntry.objects.all().delete()
     messages.success(request, 'All timetable entries cleared')
     return redirect('timetable_view')
+
+@login_required
+def download_timetable_csv(request):
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename="timetable_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv"'
+    
+    writer = csv.writer(response)
+    writer.writerow(['Day', 'Time', 'Course', 'Course Code', 'Type', 'Faculty', 'Student Group', 'Room', 'Building'])
+    
+    entries = TimetableEntry.objects.select_related(
+        'course_assignment__course',
+        'course_assignment__student_group',
+        'course_assignment__faculty',
+        'classroom',
+        'time_slot'
+    ).all().order_by('time_slot__day', 'time_slot__start_time')
+    
+    day_order = {'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5}
+    entries = sorted(entries, key=lambda x: (day_order.get(x.time_slot.day, 6), x.time_slot.start_time))
+    
+    for entry in entries:
+        writer.writerow([
+            entry.time_slot.day.capitalize(),
+            f"{entry.time_slot.start_time.strftime('%H:%M')} - {entry.time_slot.end_time.strftime('%H:%M')}",
+            entry.course_assignment.course.name,
+            entry.course_assignment.course.code,
+            entry.course_assignment.course.course_type.capitalize(),
+            entry.course_assignment.faculty.name,
+            entry.course_assignment.student_group.name,
+            entry.classroom.name,
+            entry.classroom.building
+        ])
+    
+    return response
+
+@login_required
+def download_timetable_excel(request):
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    except ImportError:
+        messages.error(request, 'openpyxl library not installed. Please run: pip install openpyxl')
+        return redirect('timetable_view')
+    
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Timetable"
+    
+    header_fill = PatternFill(start_color="4361EE", end_color="4361EE", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+    
+    headers = ['Day', 'Time', 'Course', 'Code', 'Type', 'Faculty', 'Student Group', 'Room', 'Building']
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.border = border
+    
+    entries = TimetableEntry.objects.select_related(
+        'course_assignment__course',
+        'course_assignment__student_group',
+        'course_assignment__faculty',
+        'classroom',
+        'time_slot'
+    ).all()
+    
+    day_order = {'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5}
+    entries = sorted(entries, key=lambda x: (day_order.get(x.time_slot.day, 6), x.time_slot.start_time))
+    
+    for row, entry in enumerate(entries, 2):
+        ws.cell(row=row, column=1, value=entry.time_slot.day.capitalize()).border = border
+        ws.cell(row=row, column=2, value=f"{entry.time_slot.start_time.strftime('%H:%M')} - {entry.time_slot.end_time.strftime('%H:%M')}").border = border
+        ws.cell(row=row, column=3, value=entry.course_assignment.course.name).border = border
+        ws.cell(row=row, column=4, value=entry.course_assignment.course.code).border = border
+        ws.cell(row=row, column=5, value=entry.course_assignment.course.course_type.capitalize()).border = border
+        ws.cell(row=row, column=6, value=entry.course_assignment.faculty.name).border = border
+        ws.cell(row=row, column=7, value=entry.course_assignment.student_group.name).border = border
+        ws.cell(row=row, column=8, value=entry.classroom.name).border = border
+        ws.cell(row=row, column=9, value=entry.classroom.building).border = border
+        
+        for col in range(1, 10):
+            ws.cell(row=row, column=col).alignment = Alignment(vertical='center')
+    
+    for col in range(1, 10):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 20
+    
+    ws.row_dimensions[1].height = 25
+    
+    response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    response['Content-Disposition'] = f'attachment; filename="timetable_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx"'
+    wb.save(response)
+    return response
+
+@login_required
+def download_group_timetable_csv(request, group_id):
+    group = get_object_or_404(StudentGroup, pk=group_id)
+    
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename="{group.name}_timetable_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv"'
+    
+    writer = csv.writer(response)
+    writer.writerow(['Day', 'Time', 'Course', 'Course Code', 'Type', 'Faculty', 'Room', 'Building'])
+    
+    entries = TimetableEntry.objects.filter(
+        course_assignment__student_group=group
+    ).select_related(
+        'course_assignment__course',
+        'course_assignment__faculty',
+        'classroom',
+        'time_slot'
+    ).all()
+    
+    day_order = {'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5}
+    entries = sorted(entries, key=lambda x: (day_order.get(x.time_slot.day, 6), x.time_slot.start_time))
+    
+    for entry in entries:
+        writer.writerow([
+            entry.time_slot.day.capitalize(),
+            f"{entry.time_slot.start_time.strftime('%H:%M')} - {entry.time_slot.end_time.strftime('%H:%M')}",
+            entry.course_assignment.course.name,
+            entry.course_assignment.course.code,
+            entry.course_assignment.course.course_type.capitalize(),
+            entry.course_assignment.faculty.name,
+            entry.classroom.name,
+            entry.classroom.building
+        ])
+    
+    return response
+
+@login_required
+def download_all_groups_timetable(request):
+    groups = StudentGroup.objects.all()
+    
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename="all_groups_timetable_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv"'
+    
+    writer = csv.writer(response)
+    writer.writerow(['Student Group', 'Semester', 'Day', 'Time', 'Course', 'Course Code', 'Type', 'Faculty', 'Room', 'Building'])
+    
+    for group in groups:
+        entries = TimetableEntry.objects.filter(
+            course_assignment__student_group=group
+        ).select_related(
+            'course_assignment__course',
+            'course_assignment__faculty',
+            'classroom',
+            'time_slot'
+        ).all()
+        
+        day_order = {'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5}
+        entries = sorted(entries, key=lambda x: (day_order.get(x.time_slot.day, 6), x.time_slot.start_time))
+        
+        for entry in entries:
+            writer.writerow([
+                group.name,
+                f"Sem {group.semester}",
+                entry.time_slot.day.capitalize(),
+                f"{entry.time_slot.start_time.strftime('%H:%M')} - {entry.time_slot.end_time.strftime('%H:%M')}",
+                entry.course_assignment.course.name,
+                entry.course_assignment.course.code,
+                entry.course_assignment.course.course_type.capitalize(),
+                entry.course_assignment.faculty.name,
+                entry.classroom.name,
+                entry.classroom.building
+            ])
+    
+    return response
