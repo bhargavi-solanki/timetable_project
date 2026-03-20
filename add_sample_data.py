@@ -11,6 +11,7 @@ print("Adding sample data...")
 dept1 = Department.objects.create(name="Computer Science & Engineering", code="CSE")
 dept2 = Department.objects.create(name="Information Technology", code="IT")
 dept3 = Department.objects.create(name="Electronics & Communication", code="ECE")
+dept4 = Department.objects.create(name="Bachelor of Science", code="BSC")
 print("Departments created")
 
 # Faculty
