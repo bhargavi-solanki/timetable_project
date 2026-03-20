@@ -1,0 +1,54 @@
+{% extends 'base.html' %}
+
+{% block title %}Timetable by Faculty{% endblock %}
+
+{% block content %}
+<h2 class="mb-4">Timetable by Faculty</h2>
+<form method="get" class="mb-4">
+    <div class="row">
+        <div class="col-md-4">
+            <select name="faculty" class="form-select" onchange="this.form.submit()">
+                <option value="">Select Faculty</option>
+                {% for f in faculty_list %}
+                <option value="{{ f.pk }}" {% if selected_faculty.pk == f.pk %}selected{% endif %}>{{ f.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+</form>
+{% if selected_faculty %}
+<div class="card">
+    <div class="card-header bg-success text-white">
+        <h5 class="mb-0">{{ selected_faculty.name }}</h5>
+    </div>
+    <div class="card-body">
+        {% if entries %}
+        <table class="table table-bordered">
+            <thead>
+                <tr>
+                    <th>Day</th>
+                    <th>Time</th>
+                    <th>Course</th>
+                    <th>Group</th>
+                    <th>Room</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in entries %}
+                <tr>
+                    <td>{{ entry.time_slot.get_day_display }}</td>
+                    <td>{{ entry.time_slot.start_time }} - {{ entry.time_slot.end_time }}</td>
+                    <td>{{ entry.course_assignment.course.name }}</td>
+                    <td>{{ entry.course_assignment.student_group.name }}</td>
+                    <td>{{ entry.classroom.name }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-muted">No classes assigned</p>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+{% endblock %}
